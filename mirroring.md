@@ -2,6 +2,10 @@ The essay at the top of rabbit_mirror_queue_coordinator has quite a
 decent overview of how mirroring works. In order to avoid repetition,
 this will aim to be an even higher-level summary.
 
+rabbit_mirror_queue_coordinatorの冒頭の文章は
+ミラーリングがどのように働くかについてのかなりしっかりした概要がかかれている．
+反復をさけるためにここでは上位概念のサマリにしたい．
+
 How mirroring works
 -------------------
 
@@ -12,7 +16,15 @@ implementing most of a queue (again in terms of VQ/BQ). They
 communicate via GM. Since the master can't receive messages in its own
 right there is also an associated coordinator process.
 
+簡単にいうと，masterは，rabbit_amqqueue_processとrabbit_variable_queue (VQ)の間の
+rabbit_backing_queue (BQ)の実装である，対してスレーブはほとんどのキューを
+実装する完全なプロセスである（again in terms of VQ/BQ)
+これらはGMを通じて通信する．masterは自身のからメッセージを受信できない，
+関連するコーディネータープロセスもある
+
 See rabbit_mirror_queue_coordinator for much more.
+
+rabbit_mirror_queue_coordinatorをみよ
 
 How mirroring is controlled
 ---------------------------
@@ -23,6 +35,13 @@ mirroring mode is an implementation of the behaviour
 rabbit_mirror_queue_mode - rmq_misc selects the appropriate rmq_mode,
 asks it which nodes should have slaves, and starts and stops slaves as
 appropriate.
+
+ポリシーはそれ自身が変わったことをキューに伝えるためにキューをよび，
+ミラーを更新するためにrabbit_mirror_queue_miscをよぶ．
+それぞれのミラーリングモードはrabbit_mirror_queue_modeビヘイビアの実装である．
+rmq_miscは適切なrmq_modeを選択し，どのノードがスレーブを持つべきか問い合わせる,
+そしてスレーブを適切に起動／停止する．
+
 
 Eager synchronisation
 ---------------------
@@ -38,6 +57,10 @@ much. While syncing, the processes do respond to info requests and
 emit info messages periodically, so that rabbitmqctl and management do
 not become unresponsive and outdated respectively, but otherwise they
 are dead to the world.
+
+マスターとすべてのスレーブは，同期中は停止する必要がある．
+我々はpublishやdeliveryやackを同期の進行中に扱うのは困難であると考えている．
+
 
 Because of this, we need to take care not to interfere with the state
 of the master too much - leaving it with a different flow control

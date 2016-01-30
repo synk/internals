@@ -11,6 +11,8 @@ names used by sharded queues. Another plugin using interceptors is the
 which injects timestamps into message properties during
 `basic.publish`.
 
+Interceptorsは
+
 An interceptor must implement the `rabbit_channel_interceptor`
 behaviour. The most important callback is `intercept/3` where an
 interceptor will be provided with the original AMQP method record that

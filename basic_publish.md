@@ -26,6 +26,12 @@ passing in this Erlang message: `{method, Method, Content,
 flow}`. There we have the AMQP `Method`, then method `Content`, and
 the atom `flow` indicating the channel that credit flow is in use.
 
+ひとたびCredit Flowが処理されると、`do_flow/3`はチャンネルプロセスに対して
+Erlang message:`{method, Method, Content, flow}`と共に非同期的に
+`gen_server:cast/2`を呼び出す。
+これらは、AMQPの`Method`、及びその`Content`、そしてチャンネルがcredit flowを
+使用中かどうかを示すatomである`flow`である。
+
 When the cast reaches the `handle_cast/2` function inside the channel
 module, we are finally inside the channel process memory and execution
 path. If `flow` was in use, as is the case here, then the channel will
@@ -37,6 +43,13 @@ method, then the channel process will continue processing the method,
 in our case the function `handle_method/3` will be called, with a
 `basic.publish` record.
 
+このキャストがチャンネルモジュールの`handle_cast/2`に到達すると、
+チャンネルプロセスメモリと実行パスの中にいることになる。
+`flow`が使用中の場合、チャンネルは`credit_flow:ack/1`をreaderプロセスに対して発行する。
+そして処理中のAMQPメソッドが、そのチャンネルに定義されたInterceptorに渡される。
+Interceptorの処理が終わったら、チャンネルプロセスは処理を続け、
+ここでは`handle_method/3`が`basic.publish`レコードと共に呼ばれる。
+
 ## Inside basic.publish ##
 
 basic.publish works by receiving an AMQP message, an Exchange and a
@@ -44,8 +57,15 @@ Routing Key, and it will use the exchange to route the message to one
 or various queues, based on the routing key. Let's see how's that
 accomplished.
 
+basic.publishはAMQP message、Exchange、Routing Keyを受け取ることによって動作する。
+exchangeは、routing keyに基づいてメッセージを一つから複数のキューにルートするために使われる。
+これがどのように実現されるか見ていく。
+
 The first the function does is to check the size of the message since
 RabbitMQ has an upper limit of 2GB for messages.
+
+この関数が最初に行うのはメッセージのサイズをチェックすることである。
+RabbitMQはメッセージについて2GBの上限を設けているからである。
 
 Then the function needs to build the resource record for the
 Exchange. Exchanges and Queues are represented internally with a
@@ -59,8 +79,15 @@ this:
           name         :: Name}
 ```
 
+そして、Exchangeに対してresource recordをつくる。
+ExchangeとQueueは内部的にはresouce recordとして表現される。
+これらは名前と、そのexchangeまたはqueueが定義されたvhostを保持する。
+
 So if a message was published to the default vhost to an exchange
 called `"my_exchange"`, we will end up with the following record:
+
+メッセージがデフォルトのvhostの`my_exchange`にpublishされた場合、
+次のようなレコードになる
 
 ```erlang
 #resource{virtual_host = <<"/">>
@@ -73,12 +100,17 @@ good idea to study their parts in the
 [rabbit_types](https://github.com/rabbitmq/rabbitmq-server/blob/master/src/rabbit_types.erl)
 module where this declarations are defined.
 
+そのようなリソースはRabbitMQのいたるところで使用される。
+
 Once we have the exchange record, `basic.publish` will use it to see
 if the user publishing the message has write permissions to this
 particular exchange by calling the function
 `check_write_permitted/2`. Read more about the different kind of
 permissions here:
 [access-control](https://www.rabbitmq.com/access-control.html)
+
+Exchangeレコードを用意したら、`basic.puhlish`はそれを使って`check_write_permitted/2`
+を呼び、ユーザによるパブリッシュがそののexchangeに対して書き込み権限を持っているか確認する。
 
 If the user does have permission to publish messages to this exchange,
 then the channel will query the Mnesia database trying to find out if
@@ -91,6 +123,14 @@ much different is the exchange record stored in mnesia. The latter
 holds up much more information about the actual exchange, like it's
 type for example (direct, fanout, topic, etc). Here's the exchange
 record definition from `rabbit.hrl`:
+
+ユーザがそのexchangeに対してメッセージを発行する権限を持っている場合、
+exchangeが実際に存在するか確認するためにMnesiaデータベースにクエリを行う。
+データベースから実際のexchangeレコードを取り出すために`rabbit_exchange:lookup_or_die/1`が呼び出される。
+もしexchangeが存在しなければ、`lookup_or_die/1`からチャンネルエラーが発生する。
+なお前述のexchange resourceとmnesiaに格納されたexchange resourceは大きく異なる。
+後者は実際のexchangeについての情報（direct, fanout, topic, etc)をより多く持つ.
+以下は`rabbit.hrl`に定義されたexchange recordの定義である。
 
 ```erlang
 %% fields described as 'transient' here are cleared when writing to
@@ -106,14 +146,24 @@ Then we need to check that the record returned by Mnesia happens
 is not an internal exchange, otherwise an error will be raised and the
 publish will fail.
 
+そしてMnesiaから返されたレコードが内部exchangeでないことを確認する必要がある。
+もしそうでなければエラーを発行してpublishが失敗する。
+
 The next thing to do is to validate the user id provided with the
 basic publish, if any. If provided, this user id has to validated
 against the user that created the channel where the message is being
 published. More details
 [here](https://www.rabbitmq.com/validated-user-id.html)
 
+次に、basic publishに指定されたuser idを検証する。
+そのメッセージがpublishされているチャンネルを作成したユーザーに対してuser idが検証される。
+
 Then we need to validate if the message expiration header that the
 user provided is correct. More info about the Per-Message-TTL
+
+そしてユーザが指定したメッセージのexpirationヘッダが正しいことを確認する。
+Per-Message-TTLについては以下を参照。
+
 [here](https://www.rabbitmq.com/ttl.html#per-message-ttl)
 
 Then it's time to check if the message was published as _Mandatory_ or
@@ -125,10 +175,21 @@ publisher in case the message was Mandatory and/or the channel was in
 [Confirm Mode](https://www.rabbitmq.com/confirms.html). See also the
 document [Delivering Messages to Queues](./deliver_to_queues.md).
 
+そしていよいよメッセージが _Mandatory_ としてpublishされたか、あるいは
+channelが _Transaction_ または _Confirm Mode_ であるかを確認する。
+その場合は、新しく処理されるメッセージのためにそのチャンネルの`publish_seqno`を
+インクリメントする。
+このメッセージシーケンス番号は、messageがMandatoryであるか、チャンネルが
+Confirm Modeである場合にpublisherに対して返答するために後ほど使われる。
+
 After all these steps have been completed, it's time to route the AMQP
 message, but in order to do that we need to wrap the message first
 into a `#basic_message` record, and then pass it to the exchange and
 queues as a `#delivery{}` record:
+
+これらのステップが完了したあと、AMQPメッセージをrouteするが、
+そのためにはまずメッセージを`#basic_message`レコードにラップし、
+exchangeに渡し、`#delivery{}`レコードとしてキューイングする。
 
 ```erlang
 -record(basic_message,
@@ -167,6 +228,17 @@ proposed by the
 also included in the list of destinations that will be returned to the
 channel.
 
+前のステップで作成した`#delivery`レコードは`rabbit_exchange:route/2`経由で
+exchangeに渡される。exchange名が空の`<<"">>`の場合、`default`exchangeとみなされ、
+`route/2`は単にrouting keyに関連するqueue名を返す。
+そうで無い場合、その送信はまず、ルーティングを担当するexchange用に構成された
+exchange decoratorsによって処理される。
+decoratorsは _distinations_のリストを送り返す。
+この時点で、送信はexchangeに到達し、exchangeによって実装されたroutingアルゴリズムが実行される。
+この処理は前にdecoratorsによって返されたリストとマージされて重複除去される新しい _distinations_ を返す。
+この時点で、exchange to exchangeバインディングで提案される全てのdistinations
+もチャンネルに返されるリストの中に含まれることになる。
+
 ## Processing Routing Results ##
 
 Now the channel has a list of queues to which it should deliver the
@@ -178,6 +250,14 @@ very simple form of
 [message batching](https://www.rabbitmq.com/semantics.html). If the
 channel is not in transaction mode, then the message will be delivered
 to the queues returned by the routing function.
+
+今チャンネルはメッセージが送信されるべきキューのリストを持っている。
+それを行う前に、チャンネルがtransaction modeかどうかを確認する必要がある。
+もしそうなら、`#delivery`とキューのリストはトランザクションがコミットされるまで
+キューイングされる。なおRabbitMQのトランザクションはmessage batchingの
+とてもシンプルな実装であることに留意すること。
+もしチャンネルがtransaction modeでなければ、
+ルーティング関数によって返されたキューにメッセージが送信される。
 
 ## Summary ##
 
@@ -198,6 +278,19 @@ handles the message will return back a list of queues to which the
 message must be delivered to. At this point we are done with the
 message and the channel is ready to keep processing commands.
 
+ここではメッセージがネットワークから`rabbit_reader`プロセスへ到達するのを見た。
+このプロセスは、AMQPの様々なメソッドを取り扱う`rabbit_channel`プロセスにコマンドを送る。
+この場合、メッセージがRabbitMQにpublishされた時に何が起きるかを見た。
+一度credit flowがreader processにackすると、メッセージを扱い始める。
+最初に、readerから受けたAMQPメソッドを修正したり増幅したりするinterceptorsに行き、
+そしてチャンネルはメッセージがブローカー側で設定されたサイズに収まっているのを確認する。
+それが終わると、ユーザーが選択されたexchangeにメッセージを送信する権限があるかどうか確認する。
+権限が問題なく、`user_id`と`expiration`ヘッダが問題なければ、
+メッセージをルーティングする段である。そのメッセージを扱うexchangeが、そのメッセージが送信されるべき
+キューのリストを返し、この時メッセージの処理が完了し、チャンネルは別のコマンドを処理できる状態になる。
+
 Now we can continue with the next guide and see what happens when
 messages are delivered to queues:
 [Delivering Messages to Queues](./deliver_to_queues.md)
+
+次に我々はメッセージがキューに届いてから何が起きるかを見ていく。
